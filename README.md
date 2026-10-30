@@ -54,7 +54,7 @@ OfflineTts.generateAsync(onProgress)  ──►  ReadableStream
   所以不会一开开关就把屏幕上现成的回复读一遍；正在生成的那一轮**不标记**，正常朗读。
 - 「已读」记忆在关开关时**故意保留**，否则重新打开会把刚停掉的那条再读一次。
 
-### 实现要点### 实现要点
+### 实现要点
 
 - 取文本：从 Chat 快照里找当前轮最新的 `assistant-step` / `assistant` 节点，
   `data.status === 'running'` 表示还在生成；`turn-tail.closing.blocks` 是已完成的最终回复。
@@ -68,7 +68,7 @@ OfflineTts.generateAsync(onProgress)  ──►  ReadableStream
 > 1.5.0 修复：`createStore.set` 是 patch 合并语义，早先把整个 map 当 patch 传，
 > 导致关闭开关后旧 sessionId 以 `false` 形式残留、开关关不掉。现改为把 map 放在单一 key 下。
 
-## 中英文混读（重要）## 中英文混读（重要）
+## 中英文混读（重要）
 
 **单语中文模型**（如 Piper 系）词表是拼音，**本身不认识英文单词**。
 喂纯英文给它们，引擎会打印 `Ignore OOV 'Hello'` 并把词丢掉，输出近乎静音
@@ -102,7 +102,8 @@ OfflineTts.generateAsync(onProgress)  ──►  ReadableStream
 
 ## 音色
 
-音色模型放在 `~/.dsh/read-aloud-voices/<音色id>/`，每个目录一个 `plugin.json`：
+音色模型放在 `~/.dsh/read-aloud-voices/<音色id>/`，每个目录一个 `plugin.json`。
+仓库**不附带模型**，需自行下载后按下面的格式登记——完整步骤见 [INSTALL.md](INSTALL.md)。
 
 ```json
 {
@@ -116,16 +117,19 @@ OfflineTts.generateAsync(onProgress)  ──►  ReadableStream
 }
 ```
 
-已安装：
+支持的模型类型：
 
-| 音色 | 体积 | 授权 | 速度 | 说明 |
-|---|---|---|---|---|
-| **VITS / Piper** | 约定 20 MB | 见模型卡 | 快 | 单语中文，英文需外挂系统音色 |
-| **Matcha 中英混读** | 142 MB | 见包内 README | **很快（RTF≈0.20）** | Matcha+Vocos，自己读中英，16 kHz |
+| 类型 | `model.kind` | 必需文件 | 特点 |
+|---|---|---|---|
+| **VITS / Piper** | 省略（默认 `vits`） | `file` + `tokens` + `lexicon` | 体积小（约 20 MB），快；单语，英文需外挂系统音色 |
+| **Matcha** | `matcha` | `file` + `vocoder` + `tokens` + `espeak-ng-data/` | 中英混读，很快，16 kHz |
+| **Kokoro** | `kokoro` | `file` + `voices` + `tokens` + `espeak-ng-data/` | 多语言多音色，音质最好，体积大 |
 
-### Matcha 中英混读（1.4.0 新增）
+`ruleFsts` 用于把「12340」「2026年10月」这类阿拉伯数字/日期读成中文，缺失时纯按字面推理。
 
-官方「Chinese-English」分类下真正可用的离线模型。实测（同一批句子）：
+### Matcha 中英混读
+
+中英混读场景下比单语 Piper 模型快且能读英文。实测（同一批句子）：
 
 | 句子 | 单语 Piper | Matcha | 对比 |
 |---|---|---|---|
@@ -133,15 +137,14 @@ OfflineTts.generateAsync(onProgress)  ──►  ReadableStream
 | 纯英文 | RTF 1.94，**peak 0.003（静音）** | **RTF 0.25，peak 0.860** | 能读了 |
 | 中英混合 | RTF 0.75 | **RTF 0.20** | 快 3× |
 
-它是**两段式架构**：声学模型 `model-steps-3.onnx`(72 MB) + 声码器 `vocos-16khz-univ.onnx`(51 MB)，
-所以 manifest 里要额外写 `model.vocoder`，且必须 `"kind": "matcha"`。
+它是**两段式架构**：声学模型 + 声码器，所以 manifest 里要额外写 `model.vocoder`，
+且必须 `"kind": "matcha"`。
 
 因为自带中英词典，选中它时**不做语种分段**（`multilingual` 标记），整段一次合成。
 
 代价：采样率只有 **16 kHz**（约电话质量上限），听感会比 22.05 kHz 的 Piper 略闷；只有 1 个说话人。
 
 加新音色 = 解包模型到新目录 + 写一份 `plugin.json`，重启后自动出现在下拉里，不用改代码。
-`ruleFsts` 用于把「12340」「2026年10月」这类阿拉伯数字/日期读成中文，缺失时纯按字面推理。
 
 多说话人包（如 Kokoro）还支持 `speakers` 数组，一次列出多个说话人，每项形如
 `{ "sid": 3, "label": "Kokoro 女声 01", "language": "zh-CN" }`；`model.kind: "kokoro"` 时走 Kokoro 配置分支。
@@ -214,7 +217,8 @@ Host 侧要点：
 
 - 首次朗读某个音色会有约 2 秒模型加载时间，之后约 0.3–0.5 秒出首句。
 - 音色质量取决于模型；int8 量化比 fp16 略差但体积小 4 倍。
-- **模型授权由所选模型包决定**，商用前请逐个核对模型卡。部分中文模型的训练数据集带非商用限制（例如基于 BZNSYP 的模型），选型时务必确认。
+- **模型授权由所选模型包决定**，商用前请逐个核对模型卡。部分中文模型的训练数据集
+  带非商用限制（例如基于 BZNSYP 的模型），选型时务必确认。
 - 没有浏览器自动化通道，实际出声效果需人工确认。
 
 ## 可选：系统音色补充
@@ -225,7 +229,7 @@ Windows OneCore 里还有 Kangkang（男）、Yaoyao（女）等音色，但浏�
 ## 本仓库的修复
 
 本仓库基于 `dsh-read-aloud` **1.5.4**，修复了流式自动朗读的五处缺陷，并补了一套
-回归测试。成因分析与代码位置见 [PATCHES.md](PATCHES.md)。
+回归测试。成因分析与代码位置见 [changelog/](changelog/)。
 
 | # | 问题 |
 |---|---|
@@ -244,14 +248,18 @@ node test\regression.mjs
 
 ## 安装
 
-本插件以 `link:` 方式挂载到 DeepSeek Harness 的 profile：
+完整步骤（含语音模型下载与登记）见 **[INSTALL.md](INSTALL.md)**。
+
+简版：
 
 ```powershell
-# 在 DSH profile 目录（如 <DSH_HOME>\profiles\desktop）执行
-dsh plugin --profile desktop add "@local/dsh-read-aloud@link:<本仓库绝对路径>"
+git clone <本仓库地址> dsh-read-aloud
+cd <DSH_HOME>\profiles\desktop
+dsh plugin --profile desktop add "@local/dsh-read-aloud@link:<克隆下来的目录绝对路径>"
+# 重启 DeepSeek Harness
 ```
 
-改动 `client.js` 后需**重启 Harness** 才会生效——插件只在启动时加载。
+仓库不含语音模型。不装模型也能用——会自动回退到浏览器系统语音，功能不中断。
 
 ## 许可证
 
