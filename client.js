@@ -1589,7 +1589,7 @@ window.__ModuleLoader__.load({
 
       /** Turns already handled, so one turn is never read twice. */
       const readTurns = new Set()
-      /** Streaming cursors: `${sessionId}|${turn}` -> characters already spoken. */
+      /** Streaming cursors: `${sessionId}|${turn}` -> `{ cursor, text }`. */
       const streamCursors = new Map()
       /** Mode captured when each turn was first seen, so switching never cuts one short. */
       const turnModes = new Map()
@@ -1764,6 +1764,29 @@ window.__ModuleLoader__.load({
         else stopAuto(sessionId, false)
       }
       /**
+       * Decide where reading resumes for the text currently on screen.
+       *
+       * `turnContent` reports only the newest Assistant step while a Turn is
+       * still running, and that step replaces the previous one's text wholesale
+       * whenever the model starts a new step. A cursor counted over the whole
+       * Turn would then point past the start of the new step, silently skipping
+       * everything before it — the rest of the step was read, its opening was
+       * not. So the cursor only carries over while the text still begins with
+       * what was already spoken; a replaced text starts again from zero.
+       * @param {{ cursor: number, text: string } | undefined} prev - state of the last snapshot.
+       * @param {string} text - text of the current snapshot.
+       * @returns {number} characters already spoken from `text`.
+       */
+      const streamCursorFor = (prev, text) => {
+        if (prev === undefined || prev === null) return 0
+        const cursor = typeof prev.cursor === 'number' ? prev.cursor : 0
+        if (cursor <= 0) return 0
+        const seen = typeof prev.text === 'string' ? prev.text : ''
+        /* Same source: the text merely grew, so the spoken prefix still holds. */
+        return text.slice(0, cursor) === seen.slice(0, cursor) ? cursor : 0
+      }
+
+      /**
        * Split off the part of `text` that is safe to speak now.
        *
        * In stream mode only complete sentences past the cursor are returned, so
@@ -1811,9 +1834,9 @@ window.__ModuleLoader__.load({
           return
         }
         /* stream mode */
-        const cursor = streamCursors.get(key) || 0
+        const cursor = streamCursorFor(streamCursors.get(key), info.text)
         const taken = takeSpeakable(info.text, cursor, info.closed)
-        streamCursors.set(key, taken.next)
+        streamCursors.set(key, { cursor: taken.next, text: info.text })
         if (info.closed) readTurns.add(key)
         if (toSpeechText(taken.speak).length === 0) return
         enqueueAuto(sessionId + AUTO_SEP + info.turn + AUTO_SEP + cursor, taken.speak)
