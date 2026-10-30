@@ -69,7 +69,13 @@ const CLOSURE = [
   'streamCursorFor', 'takeSpeakable', 'handleAuto', 'markRead', 'setAuto', 'drainAuto',
 ];
 
-const FUNCS = ['loadReadHistory', 'saveReadHistory', 'loadAutoMap', 'saveAutoMap'];
+const FUNCS = [
+  'loadReadHistory', 'saveReadHistory', 'loadAutoMap', 'saveAutoMap',
+  /* The real markdown→speech conversion: the tests used to stub it out as
+     (s) => s, which hid every defect that lives in the conversion itself
+     (a table was silently dropped, so its content was never read). */
+  'tablesToSpeech', 'toSpeechText',
+];
 
 /**
  * 建沙箱。storage 可传入以模拟「重启后重新加载」（同一份 localStorage）。
@@ -94,7 +100,8 @@ function buildSandbox(storage = makeStorage(), prefsMode = 'final') {
     isAutoId: (id) => typeof id === 'string' && id.includes('\u0001'),
     prefs: { getSnapshot: () => ({ mode: ctx.mode || prefsMode, voice: '', rate: 1 }) },
     enqueueAuto: (id, text) => pushed.push({ id, text }),
-    toSpeechText: (s) => s,
+    /* toSpeechText now comes from client.js (see FUNCS) so the tests exercise
+       the real markdown→speech conversion. */
   };
   vm.createContext(ctx);
   const fnSrc = FUNCS.map((n) => extractFunction(source, n)).join('\n');
@@ -116,7 +123,7 @@ const readItem = (id, text) => (
 );
 ${CLOSURE.map((n) => `const ${n} = ${extract(source, n)};`).join('\n')}
 ({ ${CLOSURE.join(',')}, readTurns, readHistory, armedSessions, autoQueue,
-   loadReadHistory, saveReadHistory });`;
+   loadReadHistory, saveReadHistory, tablesToSpeech, toSpeechText });`;
   const api = vm.runInContext(body, ctx);
   return { ctx, api, pushed, storage };
 }
@@ -441,6 +448,67 @@ check('队列中属于已关闭会话的条目被跳过', () => {
   api.autoQueue.push({ id: SID + '\u0001' + '1', text: '本会话' });
   api.drainAuto();
   assert.deepStrictEqual(started, ['本会话'], `关闭会话的条目未被跳过：${JSON.stringify(started)}`);
+});
+
+// ===========================================================================
+// 修复 7：表格内容被整段丢弃
+// ===========================================================================
+check('toSpeechText 保留表格单元格内容', () => {
+  const { api } = buildSandbox();
+  const md = ['结果如下：', '', '| 版本 | 状态 |', '|---|---|', '| 1.5.4 | 基线 |', '| 1.5.9 | 已修复 |', '', '表格后的话。'].join('\n');
+  const speech = api.toSpeechText(md);
+  for (const cell of ['版本', '状态', '1.5.4', '基线', '1.5.9', '已修复', '表格后的话']) {
+    assert.ok(speech.includes(cell), `表格内容丢失「${cell}」: ${JSON.stringify(speech)}`);
+  }
+  /* 分隔行只有横线与冒号，不该被念出来。 */
+  assert.ok(!speech.includes('---'), `分隔行被朗读: ${JSON.stringify(speech)}`);
+});
+
+check('回复以表格结尾时表格仍被朗读', () => {
+  const { api, pushed, ctx } = buildSandbox();
+  ctx.readAuto[SID] = true;
+  api.handleAuto(SID, EMPTY_SNAP);
+  const reply = ['修复情况：', '', '| 项 | 内容 |', '|---|---|', '| 队列 | 单句失败不再终止整段 |'].join('\n');
+  api.handleAuto(SID, snapshotOf([openTurn(1, reply)]));
+  api.handleAuto(SID, snapshotOf([closedTurn(1, reply)]));
+  const heard = pushed.map((p) => p.text).join('');
+  assert.ok(heard.includes('单句失败不再终止整段'),
+    `以表格结尾的内容未朗读: ${JSON.stringify(heard)}`);
+});
+
+check('表格中的拉丁词不被丢弃', () => {
+  const { api } = buildSandbox();
+  const md = ['| 依赖 | 版本 |', '|---|---|', '| nacos-client | 2.5.5 |'].join('\n');
+  const speech = api.toSpeechText(md);
+  for (const cell of ['依赖', 'nacos-client', '2.5.5']) {
+    assert.ok(speech.includes(cell), `丢失「${cell}」: ${JSON.stringify(speech)}`);
+  }
+});
+
+// ===========================================================================
+// 修复 8：回复最后一句不朗读
+// ===========================================================================
+check('回复最后一句（含拉丁缩写）被朗读', () => {
+  const { api, pushed, ctx } = buildSandbox();
+  ctx.readAuto[SID] = true;
+  api.handleAuto(SID, EMPTY_SNAP);
+  /* 先出现一个正在生成的 Turn，使它不被 ensureArmed 当作历史。 */
+  const last = '需要我帮你把 nacos-client 升到 2.5.5，并先跑一遍依赖冲突检查吗？';
+  api.handleAuto(SID, snapshotOf([openTurn(1, '先看依赖关系。\n\n' + last)]));
+  api.handleAuto(SID, snapshotOf([closedTurn(1, '先看依赖关系。\n\n' + last)]));
+  const heard = pushed.map((p) => p.text).join('');
+  assert.ok(heard.includes('依赖冲突检查吗'), `最后一句未朗读: ${JSON.stringify(heard)}`);
+});
+
+check('回复以表格结尾且表格含最后一句', () => {
+  const { api, pushed, ctx } = buildSandbox();
+  ctx.readAuto[SID] = true;
+  api.handleAuto(SID, EMPTY_SNAP);
+  const reply = ['检查完毕。', '', '| 结论 |', '|---|', '| 可以升级 |'].join('\n');
+  api.handleAuto(SID, snapshotOf([openTurn(1, reply)]));
+  api.handleAuto(SID, snapshotOf([closedTurn(1, reply)]));
+  const heard = pushed.map((p) => p.text).join('');
+  assert.ok(heard.includes('可以升级'), `表格结尾的最后一句未朗读: ${JSON.stringify(heard)}`);
 });
 
 // ===========================================================================

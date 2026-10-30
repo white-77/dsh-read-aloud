@@ -353,6 +353,49 @@ window.__ModuleLoader__.load({
     // ---------------------------------------------------------------------
 
     /**
+     * Rewrite markdown table rows as speakable sentences.
+     *
+     * Table rows used to be replaced with a space, which discarded every cell:
+     * a reply whose actual data lived in a table was read as if the table were
+     * not there, and a reply *ending* in a table stopped being read at that
+     * point. Each row now becomes one sentence — `cell，cell，cell。` — and the
+     * separator row (`|---|---|`), which carries no text, is dropped.
+     * @param {string} markdown - text that may contain table rows.
+     * @returns {string} same text with tables turned into sentences.
+     */
+    function tablesToSpeech(markdown) {
+      const lines = markdown.split('\n')
+      const out = []
+      let table = []
+      const flush = () => {
+        for (const row of table) {
+          const cells = row
+            .trim()
+            .replace(/^\|/, '')
+            .replace(/\|$/, '')
+            .split('|')
+            .map((cell) => cell.trim())
+            .filter((cell) => cell.length > 0)
+          if (cells.length === 0) continue
+          /* A separator row is nothing but dashes and colons. */
+          if (cells.every((cell) => /^:?-{2,}:?$/.test(cell))) continue
+          out.push(cells.join('，') + '。')
+        }
+        table = []
+      }
+      for (const line of lines) {
+        if (/^\s*\|.*\|\s*$/.test(line)) {
+          table.push(line)
+          continue
+        }
+        flush()
+        out.push(line)
+      }
+      flush()
+      return out.join('\n')
+    }
+
+    /**
      * Strip markdown syntax and code so the reader speaks the prose, not the markup.
      * @param {string} markdown - assistant reply text.
      * @returns {string} speakable text.
@@ -368,7 +411,7 @@ window.__ModuleLoader__.load({
       text = text.replace(/<[^>]+>/g, ' ')
       text = text.replace(/^\s{0,3}#{1,6}\s+/gm, '')
       text = text.replace(/^\s{0,3}>\s?/gm, '')
-      text = text.replace(/^\s*\|.*\|\s*$/gm, ' ')
+      text = tablesToSpeech(text)
       text = text.replace(/^\s*[-*+]\s+/gm, '')
       text = text.replace(/^\s*\d+[.)]\s+/gm, '')
       text = text.replace(/^\s*(?:[-*_]\s*){3,}$/gm, ' ')
@@ -1985,6 +2028,12 @@ window.__ModuleLoader__.load({
         const mode = turnModes.get(key)
         if (mode === 'final') {
           if (!info.closed || readTurns.has(key)) return
+          /*
+           * Mark read only when there is something to say. A reply whose text
+           * converts to nothing (a table used to become a space) was marked read
+           * without ever being spoken, so it could never be read afterwards.
+           */
+          if (toSpeechText(info.text).length === 0) return
           markRead(sessionId, info.turn)
           enqueueAuto(sessionId + AUTO_SEP + info.turn, info.text)
           return
@@ -2019,8 +2068,14 @@ window.__ModuleLoader__.load({
         }
         const taken = takeSpeakable(info.text, cursor, info.closed)
         streamCursors.set(key, { cursor: taken.next, text: info.text })
-        if (info.closed) markRead(sessionId, info.turn)
-        if (toSpeechText(taken.speak).length === 0) return
+        /*
+         * A finished Turn is only "read" once some of it was actually queueable.
+         * Marking it read while the remaining text converts to nothing would
+         * lock the Turn out of every later snapshot.
+         */
+        const speakable = toSpeechText(taken.speak)
+        if (info.closed && (speakable.length > 0 || cursor > 0)) markRead(sessionId, info.turn)
+        if (speakable.length === 0) return
         enqueueAuto(sessionId + AUTO_SEP + info.turn + AUTO_SEP + cursor, taken.speak)
       }
 
