@@ -1,0 +1,41 @@
+# 依赖与构建产物
+node_modules/
+.pnpm-store/
+dist/
+coverage/
+
+# 本地备份、临时副本与补丁残留
+*.bak
+*.bak-*
+*.bak2-*
+*.bak3-*
+*.bak4-*
+*.orig
+*.rej
+*.clean
+*~
+
+# 临时脚本、日志与调试输出
+_*.mjs
+_*.txt
+_*.tmp
+*.log
+logs/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# 系统与编辑器
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# 语音模型体积大且由用户自备，不进仓库
+*.onnx
+*.onnx.json
+voices/
+read-aloud-voices/

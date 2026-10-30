@@ -1,7 +1,7 @@
 # 朗读插件 —— 流式离线神经音色
 
 给 DeepSeek Harness Web UI 加的「朗读」能力，参考豆包回复语音朗读的交互，并在 1.3.0 起
-按「小智」的做法改为**流式合成**：Host 边合成边把 PCM 推给页面，页面用 Web Audio 排期播放，
+改为**流式合成**：Host 边合成边把 PCM 推给页面，页面用 Web Audio 排期播放，
 **第一句还在合成时就开始出声**。
 
 ## 功能
@@ -221,4 +221,46 @@ Host 侧要点：
 
 Windows OneCore 里还有 Kangkang（男）、Yaoyao（女）等音色，但浏览器 `getVoices()` 读不到（Chromium 只桥接 SAPI5）。
 把它们注册成 SAPI5 语音可以多出几个系统音色，但需要改注册表；既然已有离线神经音色，一般没必要。
+
+## 本仓库的修复
+
+本仓库基于 `dsh-read-aloud` **1.5.4**，修复了流式自动朗读的五处缺陷，并补了一套
+回归测试。成因分析与代码位置见 [PATCHES.md](PATCHES.md)。
+
+| # | 问题 |
+|---|---|
+| 1 | 多步骤回复只读出一部分：步骤切换时游标越过新文本开头，整句漏读或只读后半截 |
+| 2 | 重启后把上一次的回复重读一遍 |
+| 3 | 页面首帧快照为空时提前 arm，历史加载后被当作新消息朗读 |
+| 4 | 步骤切换时未读完的尾部被永久丢弃 |
+| 5 | 整段没有句末标点（如以冒号结尾的引导句）时整段被丢弃 |
+
+```powershell
+node test\regression.mjs
+```
+
+应输出 `28/28 通过`。测试从 `client.js` 源码中按函数名抽取真实实现运行，不复制
+逻辑，因此能真实反映当前实现。
+
+## 安装
+
+本插件以 `link:` 方式挂载到 DeepSeek Harness 的 profile：
+
+```powershell
+# 在 DSH profile 目录（如 <DSH_HOME>\profiles\desktop）执行
+dsh plugin --profile desktop add "@local/dsh-read-aloud@link:<本仓库绝对路径>"
+```
+
+改动 `client.js` 后需**重启 Harness** 才会生效——插件只在启动时加载。
+
+## 许可证
+
+[MIT](LICENSE)。
+
+两点说明：
+
+- 仓库**不包含语音模型文件**（`.onnx` 体积大且由使用者自备）。模型许可证取决于
+  所选的模型包，商用前请逐个核对模型卡；部分中文模型的训练数据集带非商用限制。
+- `package.json` 的 `private: true` 是有意保留的：包名位于 `@local` 作用域，
+  仅用于本地挂载，不发布到 npm。若要发布，请改成自己的作用域并去掉该字段。
 

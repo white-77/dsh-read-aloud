@@ -1968,13 +1968,26 @@ window.__ModuleLoader__.load({
         /*
          * A step can end mid-sentence: `takeSpeakable` only speaks up to the last
          * sentence break, and the next snapshot may replace the whole text with a
-         * different step's. The unfinished tail would then never be completed and
-         * would be lost. Speak it now, before the replacement is read.
+         * different step's. The unspoken remainder would then never be completed
+         * and would be lost, so speak it now, before the replacement is read.
+         *
+         * The remainder exists in two shapes, and both must be rescued:
+         *  - text was spoken, then replaced: the cursor falls back to 0;
+         *  - nothing was spoken because the step had no sentence break at all, so
+         *    the cursor never left 0 — a step ending in a colon (a lead-in to a
+         *    tool call) is exactly this case.
+         * A step whose text merely grew still shares its prefix, so it is not a
+         * replacement and nothing is spoken early.
          */
-        if (cursor === 0 && previous !== undefined && previous !== null && previous.cursor > 0) {
-          const tail = previous.text.slice(previous.cursor)
-          if (toSpeechText(tail).length > 0) {
-            enqueueAuto(sessionId + AUTO_SEP + info.turn + AUTO_SEP + 'tail' + AUTO_SEP + previous.cursor, tail)
+        if (previous !== undefined && previous !== null) {
+          const replaced = previous.cursor > 0
+            ? cursor === 0
+            : previous.text.length > 0 && !info.text.startsWith(previous.text)
+          if (replaced) {
+            const rest = previous.text.slice(previous.cursor)
+            if (toSpeechText(rest).length > 0) {
+              enqueueAuto(sessionId + AUTO_SEP + info.turn + AUTO_SEP + 'tail' + AUTO_SEP + previous.cursor, rest)
+            }
           }
         }
         const taken = takeSpeakable(info.text, cursor, info.closed)
