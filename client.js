@@ -1214,6 +1214,12 @@ window.__ModuleLoader__.load({
        * Neural audio is streamed and scheduled on one shared timeline, so a
        * sentence starts playing while it is still being synthesized. Chunks from
        * a system voice or a cloud voice are played as whole files.
+       *
+       * A sentence that fails to synthesize must not silence the rest of the
+       * reply: one unreadable URL or one transient synthesis error used to end
+       * the whole reading at that point, so everything after it was never
+       * spoken. Failures are now skipped, and only a run of them — which means
+       * the engine itself is down — stops playback but reports the error.
        * @param {object[]} items - engine-tagged chunks.
        * @param {number} rate - speed multiplier.
        * @param {number} myToken - generation token guarding stale callbacks.
@@ -1226,13 +1232,16 @@ window.__ModuleLoader__.load({
         const timeline = { context: null, nextAt: 0, sources: new Set(), endAt: 0 }
         playbackTimeline = timeline
         let index = 0
+        /* Skip a bad sentence, but give up when the engine is clearly broken. */
+        let failures = 0
+        let firstFailure = null
 
         const step = async () => {
           if (disposed || myToken !== token) return
           if (index >= items.length) {
             await waitForTimeline(timeline, controller)
             if (disposed || myToken !== token) return
-            reset(null)
+            reset(firstFailure)
             return
           }
           const item = items[index]
@@ -1261,13 +1270,21 @@ window.__ModuleLoader__.load({
               await speakSystemItem(item, systemOptions, rate)
             }
             if (disposed || myToken !== token) return
+            failures = 0
             index += 1
             step()
           } catch (error) {
             if (disposed || myToken !== token) return
             const name = error && error.name ? String(error.name) : ''
             if (name === 'AbortError') return
-            reset(String((error && error.message) || 'read-error'))
+            failures += 1
+            if (firstFailure === null) firstFailure = String((error && error.message) || 'read-error')
+            if (failures >= 3) {
+              reset(firstFailure)
+              return
+            }
+            index += 1
+            step()
           }
         }
         step()
@@ -1683,6 +1700,11 @@ window.__ModuleLoader__.load({
 
       /**
        * Speak queued auto-read items one at a time.
+       *
+       * A queued item can be unreadable — `speak` returns false when the text
+       * cleans down to nothing or no engine is available. Dropping it silently
+       * used to leave the rest of the queue waiting for a playback that never
+       * started, so keep taking items until one actually begins.
        */
       const drainAuto = () => {
         if (player.store.getSnapshot().playing) return
@@ -1691,8 +1713,8 @@ window.__ModuleLoader__.load({
           const next = autoQueue.shift()
           const owner = String(next.id).split(AUTO_SEP)[0]
           if (autoEnabled()[owner] !== true) continue
-          readItem(next.id, next.text)
-          return
+          const started = readItem(next.id, next.text)
+          if (started) return
         }
       }
 

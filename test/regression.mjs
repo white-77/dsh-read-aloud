@@ -66,7 +66,7 @@ function makeStorage() {
 
 const CLOSURE = [
   'orderedTurns', 'turnContent', 'turnReply', 'armSession', 'ensureArmed',
-  'streamCursorFor', 'takeSpeakable', 'handleAuto', 'markRead', 'setAuto',
+  'streamCursorFor', 'takeSpeakable', 'handleAuto', 'markRead', 'setAuto', 'drainAuto',
 ];
 
 const FUNCS = ['loadReadHistory', 'saveReadHistory', 'loadAutoMap', 'saveAutoMap'];
@@ -76,8 +76,11 @@ const FUNCS = ['loadReadHistory', 'saveReadHistory', 'loadAutoMap', 'saveAutoMap
  */
 function buildSandbox(storage = makeStorage(), prefsMode = 'final') {
   const pushed = [];
+  /* Lets a test stand in for player.speak: return false to mean "could not start". */
+  const hook = { readItem: null };
   const ctx = {
     pushed,
+    hook,
     AUTO_SEP: '\u0001',
     window: { localStorage: storage },
     autoStore: {
@@ -105,8 +108,14 @@ for (const [sessionId, ids] of readHistory) { for (const id of ids) readTurns.ad
 const armedSessions = new Set();
 const streamCursors = new Map();
 const turnModes = new Map();
+/* Real queue + a readItem the tests drive through hook.readItem, so drainAuto's
+   skip-on-failure behaviour can be exercised without a browser. */
+const autoQueue = [];
+const readItem = (id, text) => (
+  typeof hook.readItem === 'function' ? hook.readItem(id, text) : false
+);
 ${CLOSURE.map((n) => `const ${n} = ${extract(source, n)};`).join('\n')}
-({ ${CLOSURE.join(',')}, readTurns, readHistory, armedSessions,
+({ ${CLOSURE.join(',')}, readTurns, readHistory, armedSessions, autoQueue,
    loadReadHistory, saveReadHistory });`;
   const api = vm.runInContext(body, ctx);
   return { ctx, api, pushed, storage };
@@ -379,6 +388,59 @@ check('同一步骤无标点时文本增长，不应提前补读', () => {
   api.handleAuto(SID, snapshotOf([openTurn(1, '正在写一句话。')]));
   const heard = pushed.map((p) => p.text).join('');
   assert.strictEqual(heard, '正在写一句话。', `增量重复或提前补读: ${JSON.stringify(heard)}`);
+});
+
+// ===========================================================================
+// 修复 6：队列中无法开始播放的条目不应阻断后续条目
+// ===========================================================================
+check('队列首条无法开始播放时，后续条目仍要朗读', () => {
+  const { ctx, api } = buildSandbox();
+  ctx.readAuto[SID] = true;
+  const started = [];
+  /* speak() 返回 false：文本清洗后为空，或没有可用引擎。 */
+  ctx.hook.readItem = (id, text) => {
+    if (text === '空内容') return false;
+    started.push(text);
+    return true;
+  };
+  api.autoQueue.push({ id: SID + '\u0001' + '1', text: '空内容' });
+  api.autoQueue.push({ id: SID + '\u0001' + '1', text: '后面的内容要朗读。' });
+  api.drainAuto();
+  assert.deepStrictEqual(started, ['后面的内容要朗读。'],
+    `无法播放的条目阻断了队列：${JSON.stringify(started)}`);
+});
+
+check('队列全部无法播放时 drainAuto 逐条尝试并清空', () => {
+  const { ctx, api } = buildSandbox();
+  ctx.readAuto[SID] = true;
+  let calls = 0;
+  ctx.hook.readItem = () => { calls += 1; return false; };
+  api.autoQueue.push({ id: SID + '\u0001' + '1', text: 'a' });
+  api.autoQueue.push({ id: SID + '\u0001' + '2', text: 'b' });
+  api.drainAuto();
+  assert.strictEqual(calls, 2, '应逐条尝试而非停在第一条');
+  assert.strictEqual(api.autoQueue.length, 0, '队列应被清空');
+});
+
+check('播放中时 drainAuto 不出队', () => {
+  const { ctx, api } = buildSandbox();
+  ctx.readAuto[SID] = true;
+  ctx.hook.readItem = () => true;
+  ctx.player.store.getSnapshot = () => ({ playing: true, messageId: 'x' });
+  api.autoQueue.push({ id: SID + '\u0001' + '1', text: '待播' });
+  api.drainAuto();
+  assert.strictEqual(api.autoQueue.length, 1, '播放中不应出队');
+});
+
+check('队列中属于已关闭会话的条目被跳过', () => {
+  const { ctx, api } = buildSandbox();
+  ctx.readAuto[SID] = true;
+  const started = [];
+  ctx.hook.readItem = (id, text) => { started.push(text); return true; };
+  api.autoQueue.push({ id: 'other-session\u0001' + '1', text: '别的会话' });
+  api.autoQueue.push({ id: SID + '\u0001' + '1', text: '本会话' });
+  api.drainAuto();
+  assert.deepStrictEqual(started, ['本会话'], `关闭会话的条目未被跳过：${JSON.stringify(started)}`);
 });
 
 // ===========================================================================
