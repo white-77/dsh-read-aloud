@@ -1963,7 +1963,20 @@ window.__ModuleLoader__.load({
           return
         }
         /* stream mode */
-        const cursor = streamCursorFor(streamCursors.get(key), info.text)
+        const previous = streamCursors.get(key)
+        const cursor = streamCursorFor(previous, info.text)
+        /*
+         * A step can end mid-sentence: `takeSpeakable` only speaks up to the last
+         * sentence break, and the next snapshot may replace the whole text with a
+         * different step's. The unfinished tail would then never be completed and
+         * would be lost. Speak it now, before the replacement is read.
+         */
+        if (cursor === 0 && previous !== undefined && previous !== null && previous.cursor > 0) {
+          const tail = previous.text.slice(previous.cursor)
+          if (toSpeechText(tail).length > 0) {
+            enqueueAuto(sessionId + AUTO_SEP + info.turn + AUTO_SEP + 'tail' + AUTO_SEP + previous.cursor, tail)
+          }
+        }
         const taken = takeSpeakable(info.text, cursor, info.closed)
         streamCursors.set(key, { cursor: taken.next, text: info.text })
         if (info.closed) markRead(sessionId, info.turn)
