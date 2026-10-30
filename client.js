@@ -1401,6 +1401,57 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /** Turns already read, stored as `{ [sessionId]: [turnId, ...] }`. */
+    const READ_KEY = 'dsh-read-aloud:read'
+
+    /** How many Turn ids to keep per session; older ones are dropped. */
+    const READ_HISTORY_LIMIT = 40
+
+    /**
+     * Read the turns that were already spoken, so a reload never reads them again.
+     *
+     * `readTurns` used to live only in memory: a reload cleared it while the
+     * automatic-reading switch survived in localStorage, so the reply that was
+     * still on screen got read aloud again on every restart.
+     * @returns {Map<string, Set<string | number>>} session id to its read Turn ids.
+     */
+    function loadReadHistory() {
+      const empty = new Map()
+      if (typeof window === 'undefined' || !window.localStorage) return empty
+      try {
+        const raw = window.localStorage.getItem(READ_KEY)
+        if (!raw) return empty
+        const parsed = JSON.parse(raw)
+        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return empty
+        const result = new Map()
+        for (const [sessionId, ids] of Object.entries(parsed)) {
+          if (!Array.isArray(ids)) continue
+          result.set(sessionId, new Set(ids))
+        }
+        return result
+      } catch (error) {
+        return empty
+      }
+    }
+
+    /**
+     * Persist the read Turn ids per session.
+     * @param {Map<string, Set<string | number>>} history - session id to its read Turn ids.
+     */
+    function saveReadHistory(history) {
+      if (typeof window === 'undefined' || !window.localStorage) return
+      try {
+        const plain = {}
+        for (const [sessionId, ids] of history) {
+          if (ids.size === 0) continue
+          plain[sessionId] = [...ids].slice(-READ_HISTORY_LIMIT)
+        }
+        window.localStorage.setItem(READ_KEY, JSON.stringify(plain))
+      } catch (error) {
+        /* persistence is best-effort */
+      }
+    }
+
     // ---------------------------------------------------------------------
     // Icons
     // ---------------------------------------------------------------------
@@ -1589,6 +1640,24 @@ window.__ModuleLoader__.load({
 
       /** Turns already handled, so one turn is never read twice. */
       const readTurns = new Set()
+      /**
+       * Read Turn ids per session, restored from localStorage.
+       *
+       * Kept apart from `readTurns` (which uses `${sessionId}|${turnId}` keys)
+       * so the on-disk shape stays small and readable.
+       */
+      const readHistory = loadReadHistory()
+      for (const [sessionId, ids] of readHistory) {
+        for (const id of ids) readTurns.add(sessionId + '|' + id)
+      }
+      /**
+       * Sessions whose history has been marked read in this page's lifetime.
+       *
+       * The auto-read switch survives a reload through localStorage while
+       * `readTurns` does not, so a session may be observed for the first time
+       * after a restart with its switch already on.
+       */
+      const armedSessions = new Set()
       /** Streaming cursors: `${sessionId}|${turn}` -> `{ cursor, text }`. */
       const streamCursors = new Map()
       /** Mode captured when each turn was first seen, so switching never cuts one short. */
@@ -1732,6 +1801,22 @@ window.__ModuleLoader__.load({
       }
 
       /**
+       * Record that one Turn has been spoken, in memory and on disk.
+       * @param {string} sessionId - owning session.
+       * @param {string | number} turnId - the Turn's id.
+       */
+      const markRead = (sessionId, turnId) => {
+        readTurns.add(sessionId + '|' + turnId)
+        let ids = readHistory.get(sessionId)
+        if (ids === undefined) {
+          ids = new Set()
+          readHistory.set(sessionId, ids)
+        }
+        ids.add(turnId)
+        saveReadHistory(readHistory)
+      }
+
+      /**
        * Mark the Turns that were already finished when the switch was turned on.
        *
        * Without this, switching automatic reading on would immediately read the
@@ -1744,8 +1829,27 @@ window.__ModuleLoader__.load({
         for (const entry of orderedTurns(snapshot)) {
           const content = turnContent(entry.turn)
           if (content === null) continue
-          if (content.closed) readTurns.add(sessionId + '|' + entry.id)
+          if (content.closed) markRead(sessionId, entry.id)
         }
+      }
+
+      /**
+       * Mark a session's on-screen history as read, once the history has arrived.
+       *
+       * Arming cannot happen on the very first snapshot: a freshly opened page
+       * reports an empty timeline before the session's Turns are loaded, and
+       * arming against that empty snapshot would mark nothing as read while
+       * still counting the session as armed — so the history that arrives a
+       * moment later would be spoken. Wait until the snapshot actually carries
+       * at least one Turn, which is exactly the point where history is known.
+       * @param {string} sessionId - session being observed.
+       * @param {object} snapshot - Chat snapshot.
+       */
+      const ensureArmed = (sessionId, snapshot) => {
+        if (armedSessions.has(sessionId)) return
+        if (orderedTurns(snapshot).length === 0) return
+        armedSessions.add(sessionId)
+        armSession(sessionId, snapshot)
       }
 
       /**
@@ -1760,8 +1864,18 @@ window.__ModuleLoader__.load({
         else delete next[sessionId]
         autoStore.set({ map: next })
         saveAutoMap(next)
-        if (enabled) armSession(sessionId, snapshot)
-        else stopAuto(sessionId, false)
+        if (enabled) {
+          /* Arming against an empty snapshot would mark nothing; retry when turns arrive. */
+          if (orderedTurns(snapshot).length === 0) {
+            armedSessions.delete(sessionId)
+          } else {
+            armedSessions.add(sessionId)
+            armSession(sessionId, snapshot)
+          }
+        } else {
+          armedSessions.delete(sessionId)
+          stopAuto(sessionId, false)
+        }
       }
       /**
        * Decide where reading resumes for the text currently on screen.
@@ -1819,17 +1933,32 @@ window.__ModuleLoader__.load({
        */
       const handleAuto = (sessionId, snapshot) => {
         if (sessionId === undefined || autoEnabled()[sessionId] !== true) return
+        /*
+         * The switch's "on" state is persisted in localStorage, but readTurns is
+         * in-memory, and armSession() runs only when the user clicks the switch.
+         * After a reload the switch is therefore on with nothing marked as read,
+         * and the reply already on screen would be read as if it just arrived.
+         * `ensureArmed` restores the "history is not news" rule, and it waits for
+         * the history to actually load before it counts the session as armed.
+         */
+        ensureArmed(sessionId, snapshot)
         const state = player.store.getSnapshot()
         /* A manual read of a specific reply is never interrupted. */
         if (state.playing && state.messageId !== null && state.messageId !== undefined && !isAutoId(state.messageId)) return
         const info = turnReply(snapshot)
         if (info === null) return
         const key = sessionId + '|' + info.turn
+        /*
+         * A finished Turn that was already marked read is history. The final
+         * mode checks this itself, but the stream mode would otherwise speak it,
+         * so the guard lives here where both modes pass through.
+         */
+        if (info.closed && readTurns.has(key)) return
         if (!turnModes.has(key)) turnModes.set(key, prefs.getSnapshot().mode || 'final')
         const mode = turnModes.get(key)
         if (mode === 'final') {
           if (!info.closed || readTurns.has(key)) return
-          readTurns.add(key)
+          markRead(sessionId, info.turn)
           enqueueAuto(sessionId + AUTO_SEP + info.turn, info.text)
           return
         }
@@ -1837,7 +1966,7 @@ window.__ModuleLoader__.load({
         const cursor = streamCursorFor(streamCursors.get(key), info.text)
         const taken = takeSpeakable(info.text, cursor, info.closed)
         streamCursors.set(key, { cursor: taken.next, text: info.text })
-        if (info.closed) readTurns.add(key)
+        if (info.closed) markRead(sessionId, info.turn)
         if (toSpeechText(taken.speak).length === 0) return
         enqueueAuto(sessionId + AUTO_SEP + info.turn + AUTO_SEP + cursor, taken.speak)
       }
