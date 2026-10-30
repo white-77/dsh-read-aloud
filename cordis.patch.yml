@@ -1,0 +1,6 @@
+# Bundle patch: this row loads the package's main entry as the Host half.
+# The `dsh.client` declaration in package.json makes the web app load
+# ./client.js as the browser half (speaker action + General settings row).
+- insert:
+    - id: read-aloud
+      name: '@local/dsh-read-aloud'

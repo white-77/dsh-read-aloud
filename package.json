@@ -1,0 +1,36 @@
+{
+  "name": "@local/dsh-read-aloud",
+  "version": "1.5.4",
+  "private": true,
+  "description": "Read assistant replies aloud: offline neural voices (sherpa-onnx) synthesized on the Host, Streaming PCM playback so the first words play while the sentence is still being synthesized, English routed to the system voice, and a reserved OpenAI-compatible cloud TTS slot.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "docs/*.md",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-settings-general"
+      ]
+    }
+  }
+}
