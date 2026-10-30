@@ -263,12 +263,17 @@ dsh plugin --profile desktop add "@local/dsh-read-aloud@link:<克隆下来的目
 
 ## 许可证
 
-[MIT](LICENSE)。
+[Apache License 2.0](LICENSE)，版权归 `white-77` 所有，详见 [NOTICE](NOTICE)。
 
-两点说明：
+Apache 2.0 允许商用、修改、再分发与私有化使用，条件是保留版权与许可声明、
+标注修改过的文件，并附带一份许可证副本。同时包含明确的专利授权条款。
+
+三点说明：
 
 - 仓库**不包含语音模型文件**（`.onnx` 体积大且由使用者自备）。模型许可证取决于
   所选的模型包，商用前请逐个核对模型卡；部分中文模型的训练数据集带非商用限制。
+- 语音合成复用 DeepSeek Harness 自带的 `sherpa-onnx-node`，本仓库不引入新依赖，
+  该组件的许可证随 Harness 分发。
 - `package.json` 的 `private: true` 是有意保留的：包名位于 `@local` 作用域，
   仅用于本地挂载，不发布到 npm。若要发布，请改成自己的作用域并去掉该字段。
 

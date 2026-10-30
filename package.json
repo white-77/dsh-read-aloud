@@ -4,7 +4,7 @@
   "private": true,
   "description": "Read assistant replies aloud: offline neural voices (sherpa-onnx) synthesized on the Host, Streaming PCM playback so the first words play while the sentence is still being synthesized, English routed to the system voice, and a reserved OpenAI-compatible cloud TTS slot.",
   "author": "white-77",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": [
     "deepseek-harness",
     "dsh-plugin",

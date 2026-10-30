@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 white-77
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 /**
  * Host half of the Read Aloud bundle: offline neural speech synthesis.
  *

@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 white-77
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 /**
  * Browser half of the Read Aloud bundle.
  *
